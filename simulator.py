@@ -34,18 +34,20 @@ def plot_lines(data):
     plt.xlabel('Rounds Played')
     plt.ylabel('Money')
     plt.grid(True)
-    plt.savefig("blackjack_random_returns.png", dpi=300, bbox_inches='tight')
+    plt.savefig("blackjack_true_count_returns.png", dpi=300, bbox_inches='tight')
+
 
 class State:
-    def __init__(self, player_sum, dealer_hand, running_count): #, remaining_decks):
+    def __init__(self, player_sum, dealer_hand, running_count, remaining_decks):
         self.player_sum = player_sum
         self.dealer_hand = dealer_hand
         self.running_count = running_count
-        # self.remaining_decks = remaining_decks    # we can add this also rounded to nearest 0.5
-    
+        self.remaining_decks = remaining_decks
+
     # toString method
     def __str__(self):
-        return f"[Player Sum: {self.player_sum}, Dealer Hand: {self.dealer_hand}, Running Count: {self.running_count}]"
+        return (f"[Player Sum: {self.player_sum}, Dealer Hand: {self.dealer_hand}, "
+                f"Running Count: {self.running_count}, Remaining Decks: {self.remaining_decks}]")
         
 
 class BlackjackGame:
@@ -56,10 +58,8 @@ class BlackjackGame:
         self.deck = self.create_deck(num_decks)
         self.money_history = [start_money]
         self.running_count = 0
-        self.history = []  # To store [s, a, r] tuples
+        self.history = []  # To store [s, a, r, s'] tuples
         self.bet_values = [25, 50, 75, 100]
-        self.bet_probs = [0.65, 0.2, 0.1, 0.05]
-        self.play_values = ["hit", "stand"]
 
     def create_deck(self, n=1):
         suits = ["Hearts", "Diamonds", "Clubs", "Spades"]
@@ -68,19 +68,19 @@ class BlackjackGame:
         random.shuffle(deck)
         return deck
 
-    def deal_card(self, update_count = False):
+    def deal_card(self, update_count=False):
         new_card = self.deck.pop()
         if update_count:
             self.update_count(new_card)
         return new_card
-    
+
     def update_count(self, card):
         rank = card[0]
         if rank in ["2", "3", "4", "5", "6"]:
             self.running_count += 1
         elif rank in ["10", "J", "Q", "K", "A"]:
             self.running_count -= 1
-            
+
     def calculate_value(self, hand):
         value = 0
         num_aces = 0
@@ -100,13 +100,26 @@ class BlackjackGame:
 
         return value
 
+    def get_remaining_decks(self):
+        remaining_cards = len(self.deck)
+        return round(remaining_cards / 52, 1)  # Round to the nearest 0.5 decks
+
     def get_bet_amount(self):
-        # in the counting cards, bet amount is based on the count
-        # for now it is random
-        bet_amount = random.choices(self.bet_values, weights=self.bet_probs)[0]
-        while bet_amount > self.current_money:
-            bet_amount = random.choices(self.bet_values, weights=self.bet_probs)[0]
-        return bet_amount
+        # Calculate the true count
+        remaining_decks = self.get_remaining_decks()
+        true_count = self.running_count / remaining_decks if remaining_decks > 0 else 0
+
+        # Determine the bet based on true count (adjust thresholds as needed)
+        if true_count >= 5:
+            bet_amount = 100
+        elif true_count >= 3:
+            bet_amount = 75
+        elif true_count >= 1:
+            bet_amount = 50
+        else:
+            bet_amount = 25
+
+        return min(bet_amount, self.current_money)
 
     def play_round(self):
         player_hand = []
@@ -117,58 +130,58 @@ class BlackjackGame:
         player_hand.append(self.deal_card(update_count=True))
         dealer_hand.append(self.deal_card(update_count=True))
         player_hand.append(self.deal_card(update_count=True))
-        dealer_hand.append(self.deal_card(update_count=False))  # update count for dealer cards is updated later
+        dealer_hand.append(self.deal_card(update_count=False))
 
         # Create initial state
-        state = State(self.calculate_value(player_hand), self.calculate_value([dealer_hand[0]]), self.running_count)
+        state = State(self.calculate_value(player_hand), self.calculate_value([dealer_hand[0]]),
+                      self.running_count, self.get_remaining_decks())
 
-        if self.calculate_value(player_hand) == 21: # player has blackjack
-            if self.calculate_value(dealer_hand) == 21: # dealer also has blackjack
+        if self.calculate_value(player_hand) == 21:
+            if self.calculate_value(dealer_hand) == 21:
                 reward = 0
-            else: # dealer does not have blackjack
-                reward = bet_amount*1.5
+            else:
+                reward = bet_amount * 1.5
             self.update_count(dealer_hand[1])
-            next_state = State(self.calculate_value(player_hand), self.calculate_value(dealer_hand),self.running_count)
+            next_state = State(self.calculate_value(player_hand), self.calculate_value(dealer_hand),
+                               self.running_count, self.get_remaining_decks())
             self.history.append((state, "stand", reward, next_state))
             self.current_money += reward
         else:
             while True:
-                action = random.choice(self.play_values)
+                action = "hit" if state.player_sum < 17 else "stand"
                 if action == "hit":
+                    state = State(self.calculate_value(player_hand), self.calculate_value([dealer_hand[0]]),
+                                  self.running_count, self.get_remaining_decks())
 
-                    state = State(self.calculate_value(player_hand), self.calculate_value([dealer_hand[0]]), 
-                      self.running_count)
-                    
-                    player_hand.append(self.deal_card())
-                    self.update_count(player_hand[-1])
-
+                    player_hand.append(self.deal_card(update_count=True))
                     if self.calculate_value(player_hand) > 21:
                         reward = -bet_amount
-                        next_state = State(self.calculate_value(player_hand), self.calculate_value(dealer_hand),self.running_count)
+                        next_state = State(self.calculate_value(player_hand), self.calculate_value(dealer_hand),
+                                           self.running_count, self.get_remaining_decks())
                         self.history.append((state, action, reward, next_state))
                         self.current_money += reward
                         break
                     else:
                         reward = 0
-                        next_state = State(self.calculate_value(player_hand), self.calculate_value([dealer_hand[0]]),self.running_count)
+                        next_state = State(self.calculate_value(player_hand), self.calculate_value([dealer_hand[0]]),
+                                           self.running_count, self.get_remaining_decks())
                         self.history.append((state, action, reward, next_state))
-                else:  # stand
+                else:
                     while self.calculate_value(dealer_hand) < 17:
-                        dealer_hand.append(self.deal_card())
-                        self.update_count(dealer_hand[-1])
-                    
+                        dealer_hand.append(self.deal_card(update_count=True))
+
                     player_value = self.calculate_value(player_hand)
                     dealer_value = self.calculate_value(dealer_hand)
-                    
+
                     if dealer_value > 21 or player_value > dealer_value:
                         reward = bet_amount
                     elif dealer_value > player_value:
                         reward = -bet_amount
                     else:
                         reward = 0
-                    
-                    next_state = State(player_value, dealer_value, self.running_count)
-                    self.history.append((state, action, reward, next_state))    # action is stand
+
+                    next_state = State(player_value, dealer_value, self.running_count, self.get_remaining_decks())
+                    self.history.append((state, action, reward, next_state))
                     self.current_money += reward
                     break
 
@@ -184,8 +197,6 @@ class BlackjackGame:
         self.deck = self.create_deck(self.num_decks)
         self.money_history = [self.start_money]
         self.history = []
-
-
 
 if __name__ == "__main__":
     start_money = 150
